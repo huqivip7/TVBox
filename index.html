@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TVBox - 影视聚合播放器</title>
+  <!-- HLS.js：支持 M3U8 直播流 -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <link rel="stylesheet" href="src/css/main.css">
+  <style>
+    /* 额外的页面特定样式 */
+    #page-player {
+      padding: 0;
+      flex-direction: column;
+    }
+    .page-inner {
+      height: 100%;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- 侧边栏 -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">📺</div>
+      <div class="logo-text">TVBox</div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-focusable data-page="home" onclick="navigateTo('home')">
+        <span class="nav-icon">🏠</span>
+        <span class="nav-label">首页</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="movies" onclick="navigateTo('movies')">
+        <span class="nav-icon">🎬</span>
+        <span class="nav-label">电影</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="series" onclick="navigateTo('series')">
+        <span class="nav-icon">📺</span>
+        <span class="nav-label">电视剧</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="anime" onclick="navigateTo('anime')">
+        <span class="nav-icon">🎌</span>
+        <span class="nav-label">动漫</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="variety" onclick="navigateTo('variety')">
+        <span class="nav-icon">🎤</span>
+        <span class="nav-label">综艺</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="search" onclick="navigateTo('search')">
+        <span class="nav-icon">🔍</span>
+        <span class="nav-label">搜索</span>
+      </div>
+
+      <div style="height:1px;background:var(--border);margin:12px 8px;"></div>
+
+      <div class="nav-item" data-focusable data-page="live" onclick="navigateTo('live')">
+        <span class="nav-icon">📡</span>
+        <span class="nav-label">直播</span>
+      </div>
+
+      <div class="nav-item" data-focusable data-page="history" onclick="navigateTo('history')">
+        <span class="nav-icon">⏱</span>
+        <span class="nav-label">历史记录</span>
+      </div>
+      <div class="nav-item" data-focusable data-page="favorite" onclick="navigateTo('favorite')">
+        <span class="nav-icon">⭐</span>
+        <span class="nav-label">我的收藏</span>
+      </div>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="nav-item" data-focusable data-page="settings" onclick="navigateTo('settings')">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">设置</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主内容区 -->
+  <div id="main-content">
+    <!-- 顶部栏 -->
+    <header id="topbar">
+      <div class="topbar-title" id="topbar-title">🏠 首页</div>
+      <div class="topbar-search" onclick="navigateTo('search')" data-focusable>
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="搜索电影、电视剧..."
+               readonly onclick="event.stopPropagation();navigateTo('search')">
+      </div>
+      <div class="topbar-actions">
+        <button class="topbar-btn" data-focusable onclick="navigateTo('history')">⏱ 历史</button>
+        <button class="topbar-btn" data-focusable onclick="navigateTo('favorite')">⭐ 收藏</button>
+        <button class="topbar-btn" data-focusable onclick="toggleFullscreen()">⛶</button>
+      </div>
+    </header>
+
+    <!-- 首页 -->
+    <div class="page active" id="page-home">
+      <div class="loading-spinner">
+        <div class="spinner"></div>
+        <span>加载中...</span>
+      </div>
+    </div>
+
+    <!-- 电影页 -->
+    <div class="page" id="page-movies">
+      <div class="loading-spinner"><div class="spinner"></div><span>加载中...</span></div>
+    </div>
+
+    <!-- 电视剧页 -->
+    <div class="page" id="page-series">
+      <div class="loading-spinner"><div class="spinner"></div><span>加载中...</span></div>
+    </div>
+
+    <!-- 动漫页 -->
+    <div class="page" id="page-anime">
+      <div class="loading-spinner"><div class="spinner"></div><span>加载中...</span></div>
+    </div>
+
+    <!-- 综艺页 -->
+    <div class="page" id="page-variety">
+      <div class="loading-spinner"><div class="spinner"></div><span>加载中...</span></div>
+    </div>
+
+    <!-- 搜索页 -->
+    <div class="page" id="page-search">
+    </div>
+
+    <!-- 详情页 -->
+    <div class="page" id="page-detail">
+    </div>
+
+    <!-- 播放页 -->
+    <div class="page" id="page-player" style="padding:0;">
+    </div>
+
+    <!-- 历史记录页 -->
+    <div class="page" id="page-history">
+    </div>
+
+    <!-- 收藏页 -->
+    <div class="page" id="page-favorite">
+    </div>
+
+    <!-- 设置页 -->
+    <div class="page" id="page-settings">
+    </div>
+
+    <!-- 直播频道页 -->
+    <div class="page" id="page-live" style="padding:0;overflow:hidden;">
+    </div>
+
+    <!-- 直播播放页 -->
+    <div class="page" id="page-live-player" style="padding:0;overflow:hidden;">
+    </div>
+  </div>
+</div>
+
+<!-- Toast 容器 -->
+<div id="toast-container"></div>
+
+<!-- 脚本加载 -->
+<script src="src/js/core.js"></script>
+<script src="src/js/focus.js"></script>
+<script src="src/js/live.js"></script>
+<script src="src/js/ui.js"></script>
+<script>
+  // ============ 应用初始化 (v2.0) ============
+  document.addEventListener('DOMContentLoaded', () => {
+    // 加载视频源
+    SourceManager.loadAll();
+
+    // 初始化直播模块
+    if (typeof initLiveModule === 'function') initLiveModule();
+
+    // 初始化焦点引擎
+    FE.init();
+
+    // 渲染首页
+    navigateTo('home');
+
+    // 侧边栏鼠标悬停展开（CSS 处理，JS 仅负责滚动时收起）
+    let sidebarTimeout = null;
+    document.getElementById('app')?.addEventListener('mousemove', (e) => {
+      const sidebar = document.getElementById('sidebar');
+      if (!sidebar) return;
+      if (e.clientX < 180) {
+        sidebar.classList.add('expanded');
+        clearTimeout(sidebarTimeout);
+        sidebarTimeout = setTimeout(() => sidebar.classList.remove('expanded'), 3000);
+      }
+    });
+
+    // 全屏变化监听
+    document.addEventListener('fullscreenchange', () => {
+      const btns = document.querySelectorAll('[onclick="toggleFullscreen()"]');
+      const icon = document.fullscreenElement ? '⊠' : '⛶';
+      btns.forEach(b => b.textContent = icon);
+    });
+
+    console.log('%c🎬 TVBox 影视聚合播放器 v2.0', 'color:#e50914;font-size:16px;font-weight:bold;');
+    console.log('%cNetflix风格UI · 支持VOD+直播 · 方向键导航 · 数字键切台', 'color:#aaa;font-size:12px;');
+  });
+</script>
+</body>
+</html>
