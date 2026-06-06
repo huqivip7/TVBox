@@ -168,7 +168,7 @@
   // ============ 应用初始化 (v2.0) ============
   document.addEventListener('DOMContentLoaded', () => {
     // 加载视频源
-    SourceManager.loadAll();
+    SourceManager.init();
 
     // 初始化直播模块
     if (typeof initLiveModule === 'function') initLiveModule();
@@ -198,8 +198,8 @@
       btns.forEach(b => b.textContent = icon);
     });
 
-    console.log('%c🎬 TVBox 影视聚合播放器 v2.0', 'color:#e50914;font-size:16px;font-weight:bold;');
-    console.log('%cNetflix风格UI · 支持VOD+直播 · 方向键导航 · 数字键切台', 'color:#aaa;font-size:12px;');
+    console.log('%c🎬 TVBox 影视聚合播放器 v2.2', 'color:#e50914;font-size:16px;font-weight:bold;');
+    console.log('%cApple TV UI · 在线源获取 · 支持VOD+直播 · 方向键导航', 'color:#aaa;font-size:12px;');
   });
 </script>
 </body>

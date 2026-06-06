@@ -658,6 +658,23 @@ function renderSettings() {
 
   page.innerHTML = `
     <div class="settings-section">
+      <div class="settings-section-title">🌐 在线获取源（一键更新）</div>
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">推荐仓库：</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+          ${OnlineSourceFetcher.getRecommendedRepos().map(r => `
+            <button class="source-btn" data-focusable onclick="fetchFromRepo('${r.name}')" style="font-size:11px;padding:5px 10px;">${r.name}</button>
+          `).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+        <input class="modal-input" id="online-repo-input" placeholder="输入 GitHub 仓库（如：gaotianliuyun/gao）或文件 URL" style="flex:1;min-width:200px;">
+        <button class="btn-primary" data-focusable onclick="fetchFromRepoInput()" style="font-size:13px;padding:8px 16px;">获取源</button>
+      </div>
+      <div id="online-sources-result" style="min-height:40px;"></div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section-title">📡 点播视频源管理</div>
       <div id="sources-list">
         ${sources.map(s => `
@@ -824,4 +841,188 @@ function addNewLiveSource() {
 function removeLiveSource(id) {
   LiveSourceManager.remove(id);
   showToast('直播源已删除', 'info');
+}
+
+// ========= 在线获取源 (v2.1) =========
+let _onlineSources = []; // 当前获取的源列表
+let _onlinePreviewData = null; // JSON 展开预览数据
+
+async function fetchFromRepoInput() {
+  const input = document.getElementById('online-repo-input');
+  if (!input || !input.value.trim()) {
+    showToast('请输入仓库地址或 URL', 'error');
+    return;
+  }
+  await fetchFromRepo(input.value.trim());
+}
+
+async function fetchFromRepo(repoInput) {
+  const resultDiv = document.getElementById('online-sources-result');
+  if (!resultDiv) return;
+  resultDiv.innerHTML = '<div class="loading-spinner" style="padding:12px;"><div class="spinner"></div><span>正在获取源列表...</span></div>';
+
+  try {
+    // 判断是 repo 还是直接 URL
+    if (repoInput.startsWith('http')) {
+      // 直接 URL
+      const sources = await OnlineSourceFetcher.fetchFromUrl(repoInput);
+      _onlineSources = sources;
+      renderOnlineSourcesResult(sources, repoInput);
+    } else {
+      // GitHub 仓库
+      const sources = await OnlineSourceFetcher.fetchFromRepo(repoInput);
+      _onlineSources = sources;
+      renderOnlineSourcesResult(sources, repoInput);
+    }
+  } catch (e) {
+    resultDiv.innerHTML = `<div style="color:var(--red);font-size:13px;padding:8px 0;">获取失败：${e.message}</div>`;
+  }
+}
+
+function renderOnlineSourcesResult(sources, origin) {
+  const resultDiv = document.getElementById('online-sources-result');
+  if (!resultDiv) return;
+
+  if (!sources || !sources.length) {
+    resultDiv.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">未找到可用源</div>';
+    return;
+  }
+
+  let html = `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">找到 ${sources.length} 个可用源，选择要添加的：</div>`;
+  html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+
+  sources.forEach((s, i) => {
+    const isVod = s.type === 'vod';
+    const icon = isVod ? '📡' : '📺';
+    const typeLabel = isVod ? '<span style="color:var(--blue);font-size:11px;">点播</span>' : '<span style="color:var(--accent);font-size:11px;">直播</span>';
+    const extra = s.groupCount ? ` · ${s.groupCount}组` : (s.channelCount ? ` · ${s.channelCount}频道` : (s.channels ? ` · ${s.channels}频道` : ''));
+    const previewBtn = s.needsPreview ? `<button class="source-btn" data-focusable onclick="previewOnlineSource(${i})" style="font-size:11px;padding:3px 8px;">预览</button>` : '';
+
+    html += `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--border);">
+        <input type="checkbox" id="osel_${i}" checked style="flex-shrink:0;" onchange="toggleOnlineSourceSelect(${i}, this.checked)">
+        <span style="font-size:14px;flex-shrink:0;">${icon}</span>
+        <div style="flex:1;min-width:0;overflow:hidden;">
+          <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.name}</div>
+          <div style="font-size:11px;color:var(--text-muted);display:flex;gap:6px;align-items:center;">
+            ${typeLabel}${extra}
+            ${s.groups ? `<span style="color:var(--text-muted);">${s.groups}</span>` : ''}
+          </div>
+        </div>
+        ${previewBtn}
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  html += `<div style="display:flex;gap:8px;margin-top:10px;">
+    <button class="btn-primary" data-focusable onclick="importSelectedSources('${origin.replace(/'/g, "\\'")}')" style="font-size:13px;padding:7px 18px;">导入选中源</button>
+    <button class="btn-secondary" data-focusable onclick="document.getElementById('online-sources-result').innerHTML=''" style="font-size:13px;padding:7px 18px;">清除</button>
+  </div>`;
+
+  resultDiv.innerHTML = html;
+  // 默认全选
+  _onlineSelected = sources.map((_, i) => i);
+}
+
+let _onlineSelected = [];
+
+function toggleOnlineSourceSelect(idx, checked) {
+  if (checked) {
+    if (!_onlineSelected.includes(idx)) _onlineSelected.push(idx);
+  } else {
+    _onlineSelected = _onlineSelected.filter(i => i !== idx);
+  }
+}
+
+async function previewOnlineSource(idx) {
+  const s = _onlineSources[idx];
+  if (!s) return;
+
+  showModal(`
+    <div class="modal-title">预览源内容</div>
+    <div id="preview-loading" style="padding:20px;text-align:center;color:var(--text-muted);">
+      <div class="spinner" style="margin:0 auto 8px;"></div>加载中...
+    </div>
+    <div id="preview-content"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" data-focusable onclick="hideModal()">关闭</button>
+    </div>
+  `);
+
+  try {
+    let items = [];
+    if (s.fileType === 'json' || s.format === 'json') {
+      items = await OnlineSourceFetcher.previewJsonSource(s.url);
+    } else if (s.fileType === 'txt' || s.format === 'txt') {
+      items = await OnlineSourceFetcher.previewTxtSource(s.url);
+    }
+    const content = document.getElementById('preview-content');
+    const loading = document.getElementById('preview-loading');
+    if (loading) loading.style.display = 'none';
+    if (content) {
+      if (!items || !items.length) {
+        content.innerHTML = '<div style="color:var(--text-muted);padding:12px;">未找到可导入的源</div>';
+        return;
+      }
+      content.innerHTML = `<div style="max-height:50vh;overflow-y:auto;">
+        ${items.map((item, i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);">
+            <input type="checkbox" id="psel_${i}" checked>
+            <span style="flex:1;font-size:13px;">${item.name}</span>
+            ${item.url ? `<span style="font-size:11px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.url.slice(0, 40)}</span>` : ''}
+          </div>
+        `).join('')}
+      </div>`;
+      // 存储预览数据供导入使用
+      _onlinePreviewData = items;
+    }
+  } catch (e) {
+    const content = document.getElementById('preview-content');
+    if (content) content.innerHTML = `<div style="color:var(--red);padding:12px;">预览失败：${e.message}</div>`;
+    const loading = document.getElementById('preview-loading');
+    if (loading) loading.style.display = 'none';
+  }
+}
+
+async function importSelectedSources(origin) {
+  if (!_onlineSelected.length) {
+    showToast('请先选择要导入的源', 'error');
+    return;
+  }
+
+  let imported = 0;
+  const sources = _onlineSources;
+
+  for (const idx of _onlineSelected) {
+    const s = sources[idx];
+    if (!s) continue;
+
+    try {
+      if (s.type === 'vod') {
+        // 点播源：如果是 JSON 且包含 sites，逐个添加
+        if (s.source && s.source.api) {
+          SourceManager.add(s.name, s.source.api, 'json');
+          imported++;
+        } else if (s.url) {
+          SourceManager.add(s.name, s.url, s.format || 'json');
+          imported++;
+        }
+      } else {
+        // 直播源
+        LiveSourceManager.add(s.name, s.url, s.format || 'auto');
+        imported++;
+      }
+    } catch (e) {
+      console.warn('导入源失败:', s.name, e);
+    }
+  }
+
+  showToast(`成功导入 ${imported} 个源`, 'success');
+  // 刷新设置页
+  const resultDiv = document.getElementById('online-sources-result');
+  if (resultDiv) resultDiv.innerHTML = '';
+  _onlineSources = [];
+  _onlineSelected = [];
+  renderSettings();
 }

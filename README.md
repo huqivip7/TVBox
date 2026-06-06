@@ -50,7 +50,7 @@
 |------|------|
 | `index.html` | 主入口（侧边栏 + 顶栏 + 12 个页面容器） |
 | `src/css/main.css` | 完整样式系统（Liquid Glass + Apple TV Focus） |
-| `src/js/core.js` | 核心数据层（Store / SourceManager / VodAPI / HistoryManager / FavoriteManager） |
+| `src/js/core.js` | 核心数据层（Store / SourceManager / VodAPI / OnlineSourceFetcher / HistoryManager / FavoriteManager） |
 | `src/js/focus.js` | 焦点导航引擎（空间邻近算法 / 数字键输入 / Hero 轮播） |
 | `src/js/live.js` | 直播模块（多格式解析器 / EPG 管理器 / HLS 播放器） |
 | `src/js/ui.js` | UI 渲染层（路由系统 / 页面渲染 / 弹窗系统） |
@@ -97,6 +97,18 @@ php -S localhost:8080
 2. 点击 **添加源**，输入源名称和 JSON API 地址
 3. 支持标准 tvbox 格式的 JSON API（如：j4Uq/TVBoxOSC 兼容源）
 
+### 在线获取源（一键更新）
+1. 进入 **设置** → **在线获取源**
+2. 输入 GitHub 仓库名（如 `gaotianliuyun/gao`）或完整 URL，点击 **获取源**
+3. 系统自动识别仓库中的 JSON（点播配置）、TXT（直播源）、M3U（直播源）文件
+4. 勾选要导入的源，点击 **导入选中源**
+5. 已导入的源可在对应的点播/直播源管理中查看和切换
+6. 支持的推荐仓库：
+   - `gaotianliuyun/gao` — FongMi 影视 / TVBox 配置合集（点播 + 直播）
+   - `q215613905/TVBoxOS` — TVBox OS 版本
+   - `takagen99/Box` — Box 衍生版
+   - `catvod/CatVodOpen` — 猫影视开源版
+
 ### 添加直播源
 1. 进入 **设置** → **直播源管理** 或 **直播** 页面 → 添加
 2. 输入源名称和地址（支持 M3U / JSON / TXT 格式）
@@ -116,6 +128,23 @@ php -S localhost:8080
 ---
 
 ## 更新日志
+
+### v2.2 - 2026-06-06
+
+**新增在线源获取功能**
+- 新增 "在线获取源" 功能：输入 GitHub 仓库地址或文件 URL，一键获取和导入源
+- 支持 GitHub 仓库自动扫描（自动检测 master/main 分支）
+- 自动识别 JSON（TVBox 点播配置）、TXT（TVBox 直播格式）、M3U（直播源）文件
+- TVBox JSON 配置解析：展开 `sites` 数组，逐个导入点播源
+- TVBox TXT 直播格式解析：支持 `组名,#genre#` + `频道名,url` 格式
+- 预览功能：可展开 JSON 文件查看所有 sites 并选择导入
+- 推荐仓库快捷按钮（gaotianliuyun/gao、TVBoxOS、Box 等）
+- 使用 corsproxy.io 解决跨域访问限制
+- 核心引擎 `core.js` 新增 `OnlineSourceFetcher` 模块
+- UI 渲染层 `ui.js` 新增在线获取交互界面（复选框 + 预览弹窗）
+- 修复 `SourceManager.loadAll()` → `SourceManager.init()` 初始化调用错误
+- CSS 新增自定义 checkbox 样式（Apple 风格蓝色勾选）
+- 版本号更新至 v2.2
 
 ### v2.1 - 2026-06-06
 

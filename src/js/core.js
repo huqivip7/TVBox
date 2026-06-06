@@ -1,6 +1,6 @@
 /* ============================================================
-   TVBox Pro - 核心引擎
-   视频源管理 · 数据缓存 · 多线路切换 · 存储管理
+   TVBox Pro - 核心引擎 v2.1
+   视频源管理 · 数据缓存 · 多线路切换 · 存储管理 · 在线源获取
    ============================================================ */
 
 // ========= 存储管理 =========
@@ -10,9 +10,7 @@ const Store = {
   get(key, def = null) { try { const v = localStorage.getItem(this._prefix + key); return v ? JSON.parse(v) : def; } catch(e) { return def; } },
   remove(key) { localStorage.removeItem(this._prefix + key); },
   clear() {
-    Object.keys(localStorage)
-      .filter(k => k.startsWith(this._prefix))
-      .forEach(k => localStorage.removeItem(k));
+    Object.keys(localStorage).filter(k => k.startsWith(this._prefix)).forEach(k => localStorage.removeItem(k));
   }
 };
 
@@ -25,16 +23,8 @@ const SourceManager = {
   init() {
     this._sources = Store.get(this._key, []);
     this._activeId = Store.get('active_source_id', null);
-    // 默认源
     if (!this._sources.length) {
-      this._sources.push({
-        id: 'default',
-        name: '默认数据源（演示）',
-        url: '',
-        type: 'built-in',
-        active: true,
-        addTime: Date.now()
-      });
+      this._sources.push({ id: 'default', name: '默认数据源（演示）', url: '', type: 'built-in', active: true, addTime: Date.now() });
       this._activeId = 'default';
       this.save();
     }
@@ -55,11 +45,7 @@ const SourceManager = {
   add(name, url, type = 'json') {
     const src = {
       id: 'src_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-      name,
-      url,
-      type,
-      active: false,
-      addTime: Date.now()
+      name, url, type, active: false, addTime: Date.now()
     };
     this._sources.push(src);
     this.save();
@@ -72,17 +58,263 @@ const SourceManager = {
     this.save();
   },
 
-  save() {
-    Store.set(this._key, this._sources);
+  save() { Store.set(this._key, this._sources); }
+};
+
+// ========= 在线源获取器 (v2.1) =========
+const OnlineSourceFetcher = {
+  /**
+   * 从 GitHub 仓库获取可用源列表
+   * @param {string} repoInput - "owner/repo" 或完整 GitHub URL
+   * @returns {Promise<Array>} 源列表 [{name,url,format,type,needsPreview,fileType}]
+   */
+  async fetchFromRepo(repoInput) {
+    let owner, repo, branch = 'master';
+    const repoMatch = repoInput.match(/github\.com\/([^/]+)\/([^/#?\s]+)/i);
+    const shortMatch = repoInput.match(/^([^/]+)\/([^/]+)$/);
+    if (repoMatch) {
+      owner = repoMatch[1];
+      repo = repoMatch[2].replace(/\.git$/, '');
+    } else if (shortMatch) {
+      owner = shortMatch[1];
+      repo = shortMatch[2];
+    } else {
+      throw new Error('无法识别仓库地址，请输入 "owner/repo" 或完整 GitHub URL');
+    }
+
+    // Try master first, then main
+    let files;
+    try {
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/?ref=${branch}`;
+      const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(apiUrl)}`;
+      const resp = await fetch(proxyUrl, { headers: { 'Accept': 'application/vnd.github.v3+json' } });
+      if (!resp.ok) throw new Error('master failed');
+      files = await resp.json();
+    } catch(e) {
+      try {
+        const apiUrl2 = `https://api.github.com/repos/${owner}/${repo}/contents/?ref=main`;
+        const proxyUrl2 = `https://corsproxy.io/?url=${encodeURIComponent(apiUrl2)}`;
+        const resp2 = await fetch(proxyUrl2);
+        if (!resp2.ok) throw new Error(`无法访问仓库：${resp2.status}`);
+        files = await resp2.json();
+        branch = 'main';
+      } catch(e2) {
+        throw new Error(`无法访问仓库 ${owner}/${repo}：请检查仓库是否存在且为公开`);
+      }
+    }
+    return this._parseRepoFiles(files, owner, repo, branch);
+  },
+
+  /**
+   * 从完整 raw URL 直接获取（单个文件）
+   */
+  async fetchFromUrl(url) {
+    if (!url || !url.startsWith('http')) throw new Error('请输入有效的 URL');
+    const lower = url.toLowerCase();
+    let format = 'unknown';
+    if (lower.includes('.json')) format = 'json';
+    else if (lower.includes('.m3u')) format = 'm3u';
+    else if (lower.includes('.txt')) format = 'txt';
+
+    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) throw new Error(`获取失败：${resp.status} ${resp.statusText}`);
+    const text = await resp.text();
+
+    if (format === 'json') {
+      return this._parseJsonSources(text, url);
+    } else if (format === 'm3u') {
+      return [{ name: this._extractNameFromUrl(url), url, format: 'm3u', type: 'live', channels: this._countM3U(text) }];
+    } else if (format === 'txt') {
+      return this._parseTxtSources(text, url);
+    }
+    return [];
+  },
+
+  /**
+   * 解析仓库文件列表，提取可用源
+   */
+  _parseRepoFiles(files, owner, repo, branch) {
+    const sources = [];
+    const rawBase = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}`;
+
+    const jsonFiles = files.filter(f => f.name.endsWith('.json') && !f.name.startsWith('.'));
+    const m3uFiles = files.filter(f => f.name.endsWith('.m3u'));
+    const txtFiles = files.filter(f => f.name.endsWith('.txt') && !f.name.toLowerCase().includes('readme'));
+
+    jsonFiles.forEach(f => {
+      sources.push({
+        name: f.name,
+        url: `${rawBase}/${f.name}`,
+        format: 'json',
+        type: 'unknown',
+        needsPreview: true,
+        fileType: 'json'
+      });
+    });
+
+    m3uFiles.forEach(f => {
+      sources.push({
+        name: f.name,
+        url: `${rawBase}/${f.name}`,
+        format: 'm3u',
+        type: 'live',
+        channels: '?',
+        fileType: 'm3u'
+      });
+    });
+
+    txtFiles.forEach(f => {
+      sources.push({
+        name: f.name,
+        url: `${rawBase}/${f.name}`,
+        format: 'txt',
+        type: 'live',
+        needsPreview: true,
+        fileType: 'txt'
+      });
+    });
+
+    return sources;
+  },
+
+  /**
+   * 预览 JSON 文件内容（展开 TVBox 配置的 sites 列表）
+   */
+  async previewJsonSource(url) {
+    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) throw new Error(`获取文件失败：${resp.status}`);
+    const text = await resp.text();
+    return this._parseJsonSources(text, url);
+  },
+
+  /**
+   * 解析 JSON 内容，提取 sites 列表
+   */
+  _parseJsonSources(text, url) {
+    const data = JSON.parse(text);
+    const sources = [];
+
+    // TVBox 格式：{ sites: [{name, key, api}] }
+    if (data.sites && Array.isArray(data.sites)) {
+      data.sites.forEach(s => {
+        sources.push({
+          name: s.name || s.key || '未知源',
+          url: s.api || s.url || '',
+          key: s.key || '',
+          format: 'json',
+          type: 'vod',
+          source: s
+        });
+      });
+    }
+    // 单一直播 JSON 格式：{ channels: [...] }
+    else if (data.channels && Array.isArray(data.channels)) {
+      sources.push({
+        name: this._extractNameFromUrl(url),
+        url,
+        format: 'json',
+        type: 'live',
+        channels: data.channels.length
+      });
+    }
+    // 纯数组格式
+    else if (Array.isArray(data)) {
+      data.forEach((s, i) => {
+        sources.push({
+          name: s.name || s.key || `源${i + 1}`,
+          url: s.api || s.url || '',
+          format: 'json',
+          type: 'vod',
+          source: s
+        });
+      });
+    }
+    return sources;
+  },
+
+  /**
+   * 预览 TXT 内容（TVBox 直播格式）
+   */
+  async previewTxtSource(url) {
+    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) throw new Error(`获取文件失败：${resp.status}`);
+    const text = await resp.text();
+    return this._parseTxtSources(text, url);
+  },
+
+  _parseTxtSources(text, url) {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const groups = {};
+    let currentGroup = '默认';
+    let totalChannels = 0;
+
+    for (const line of lines) {
+      if (line.endsWith(',#genre#') || line.endsWith('#genre#')) {
+        currentGroup = line.replace(',#genre#', '').replace('#genre#', '').trim();
+        continue;
+      }
+      if (line.includes(',http')) {
+        const commaIdx = line.indexOf(',http');
+        if (commaIdx > 0) {
+          if (!groups[currentGroup]) groups[currentGroup] = 0;
+          groups[currentGroup]++;
+          totalChannels++;
+        }
+      }
+    }
+
+    return [{
+      name: this._extractNameFromUrl(url),
+      url,
+      format: 'txt',
+      type: 'live',
+      groupCount: Object.keys(groups).length,
+      channelCount: totalChannels,
+      groups: Object.keys(groups).slice(0, 8).join(', ') + (Object.keys(groups).length > 8 ? '...' : '')
+    }];
+  },
+
+  /**
+   * 统计 M3U 频道数
+   */
+  _countM3U(text) {
+    return (text.match(/^#EXTINF/gm) || []).length || (text.match(/^http/gm) || []).length;
+  },
+
+  /**
+   * 从 URL 提取可读名称
+   */
+  _extractNameFromUrl(url) {
+    try {
+      const path = new URL(url).pathname;
+      const name = path.split('/').pop().replace(/\.(json|txt|m3u)$/i, '');
+      return decodeURIComponent(name) || '在线源';
+    } catch {
+      return '在线源';
+    }
+  },
+
+  /**
+   * 获取推荐源仓库列表
+   */
+  getRecommendedRepos() {
+    return [
+      { name: 'gaotianliuyun/gao', desc: 'FongMi影视/TVBox 配置，含多个点播+直播源', stars: '10k+' },
+      { name: 'q215613905/TVBoxOS', desc: 'TVBox OS 版本，支持直播回放', stars: '17k+' },
+      { name: 'takagen99/Box', desc: 'TVBox 衍生版，支持回放，界面美观', stars: '3k+' },
+      { name: 'catvod/CatVodOpen', desc: '猫影视开源版', stars: '5k+' },
+    ];
   }
 };
 
 // ========= 视频数据 API 适配器 =========
 const VodAPI = {
-  // 缓存
   _cache: {},
   _cacheTime: {},
-  _cacheTTL: 5 * 60 * 1000, // 5分钟
+  _cacheTTL: 5 * 60 * 1000,
 
   _getCached(key) {
     if (this._cache[key] && Date.now() - this._cacheTime[key] < this._cacheTTL) {
@@ -96,54 +328,39 @@ const VodAPI = {
     this._cacheTime[key] = Date.now();
   },
 
-  // 演示数据
   _demoData: null,
 
   _getDemoData() {
     if (this._demoData) return this._demoData;
-    const colors = ['linear-gradient(135deg,#1a1a2e,#16213e)', 'linear-gradient(135deg,#2d1b69,#11998e)', 'linear-gradient(135deg,#1e3c72,#2a5298)', 'linear-gradient(135deg,#0f0c29,#302b63)', 'linear-gradient(135deg,#141e30,#243b55)', 'linear-gradient(135deg,#3a1c71,#d76d77)', 'linear-gradient(135deg,#0f2027,#203a43)', 'linear-gradient(135deg,#1a0530,#2c0b3a)', 'linear-gradient(135deg,#0c0c1d,#1a1a3e)', 'linear-gradient(135deg,#1b1b2f,#162447)'];
+    const colors = [
+      'linear-gradient(135deg,#1a1a2e,#16213e)',
+      'linear-gradient(135deg,#2d1b69,#11998e)',
+      'linear-gradient(135deg,#1e3c72,#2a5298)',
+      'linear-gradient(135deg,#0f0c29,#302b63)',
+      'linear-gradient(135deg,#141e30,#243b55)',
+    ];
     const titles = {
-      '电影': [
-        '沙丘2', '奥本海默', '流浪地球3', '封神第二部', '热辣滚烫',
-        '飞驰人生2', '第二十条', '周处除三害', '功夫熊猫4', '哥斯拉大战金刚2',
-        '抓娃娃', '默杀', '异形：夺命舰', '死侍与金刚狼', '头脑特工队2',
-        '志愿军：存亡之战', '想飞的女孩', '角斗士2', '小丑2', '海关战线'
-      ],
-      '电视剧': [
-        '庆余年2', '繁花', '狂飙', '长相思', '与凤行',
-        '墨雨云间', '玫瑰的故事', '庆余年', '大江大河', '漫长的季节',
-        '三体', '人世间', '开端', '觉醒年代', '隐秘的角落',
-        '去有风的地方', '爱情而已', '县委大院', '警察荣誉', '风吹半夏'
-      ],
-      '动漫': [
-        '进击的巨人 最终季', '鬼灭之刃 柱训练篇', '咒术回战', '间谍过家家',
-        '电锯人', '葬送的芙莉莲', '我独自升级', '药屋少女的呢喃',
-        '迷宫饭', '排球少年 垃圾场决战', '蓝色禁区', '死神少爷与黑女仆',
-        '中国奇谭', '刺客伍六七', '斗破苍穹 年番', '完美世界', '一念永恒'
-      ],
-      '综艺': [
-        '歌手2024', '奔跑吧', '披荆斩棘的哥哥', '向往的生活',
-        '我是歌手', '极限挑战', '花儿与少年', '声生不息',
-        '乘风破浪', '中国好声音', '脱口秀大会', '王牌对王牌',
-        '欢乐喜剧人', '奔跑吧兄弟', '最强大脑', '梦想的声音'
-      ]
+      '电影': ['沙丘2','奥本海默','流浪地球3','封神第二部','热辣滚烫','飞驰人生2','第二十条','周处除三害','功夫熊猫4','哥斯拉大战金刚2','抓娃娃','默杀','异形：夺命舰','死侍与金刚狼','头脑特工队2','志愿军：存亡之战','想飞的女孩','角斗士2','小丑2','海关战线'],
+      '电视剧': ['庆余年2','繁花','狂飙','长相思','与凤行','墨雨云间','玫瑰的故事','庆余年','大江大河','漫长的季节','三体','人世间','开端','觉醒年代','隐秘的角落','去有风的地方','爱情而已','县委大院','警察荣誉','风吹半夏'],
+      '动漫': ['进击的巨人 最终季','鬼灭之刃 柱训练篇','咒术回战','间谍过家家','电锯人','葬送的芙莉莲','我独自升级','药屋少女的呢喃','迷宫饭','排球少年 垃圾场决战','蓝色禁区','死神少爷与黑女仆','中国奇谭','刺客伍六七','斗破苍穹 年番','完美世界','一念永恒'],
+      '综艺': ['歌手2024','奔跑吧','披荆斩棘的哥哥','向往的生活','我是歌手','极限挑战','花儿与少年','声生不息','乘风破浪','中国好声音','脱口秀大会','王牌对王牌','欢乐喜剧人','奔跑吧兄弟','最强大脑','梦想的声音'],
     };
-    const actors = ['张译', '吴京', '沈腾', '黄渤', '刘德华', '梁朝伟', '周星驰', '马丽', '贾玲', '赵丽颖', '杨幂', '杨紫', '迪丽热巴', '肖战', '王一博', '刘亦菲', '陈道明', '张颂文', '王传君', '于和伟'];
+    const actors = ['张译','吴京','沈腾','黄渤','刘德华','梁朝伟','周星驰','马丽','贾玲','赵丽颖','杨幂','杨紫','迪丽热巴','肖战','王一博','刘亦菲','陈道明','张颂文','王传君','于和伟'];
 
     const makeMovies = (category, titleList) => {
       return titleList.map((title, i) => {
         const year = 2024 + Math.floor(Math.random() * 3);
         const score = (6 + Math.random() * 3.5).toFixed(1);
-        const area = ['中国大陆', '中国香港', '美国', '韩国', '日本'][Math.floor(Math.random() * 5)];
+        const area = ['中国大陆','中国香港','美国','韩国','日本'][Math.floor(Math.random() * 5)];
         const genreList = {
-          '电影': ['动作', '科幻', '喜剧', '剧情', '悬疑', '爱情', '战争', '动画', '奇幻', '犯罪'],
-          '电视剧': ['都市', '古装', '悬疑', '家庭', '军旅', '科幻', '爱情', '历史', '谍战', '喜剧'],
-          '动漫': ['热血', '冒险', '搞笑', '奇幻', '战斗', '治愈', '推理', '恋爱', '日常', '运动'],
-          '综艺': ['真人秀', '音乐', '脱口秀', '竞技', '旅行', '美食', '访谈', '搞笑', '选秀', '文化']
+          '电影': ['动作','科幻','喜剧','剧情','悬疑','爱情','战争','动画','奇幻','犯罪'],
+          '电视剧': ['都市','古装','悬疑','家庭','军旅','科幻','爱情','历史','谍战','喜剧'],
+          '动漫': ['热血','冒险','搞笑','奇幻','战斗','治愈','推理','恋爱','日常','运动'],
+          '综艺': ['真人秀','音乐','脱口秀','竞技','旅行','美食','访谈','搞笑','选秀','文化']
         };
         const genres = genreList[category];
-        const genre1 = genres[Math.floor(Math.random() * genres.length)];
-        const genre2 = genres[Math.floor(Math.random() * genres.length)];
+        const g1 = genres[Math.floor(Math.random() * genres.length)];
+        const g2 = genres[Math.floor(Math.random() * genres.length)];
         const epCount = category === '电影' ? 1 : (3 + Math.floor(Math.random() * 40));
         const badge = Math.random() > 0.7 ? 'hot' : (Math.random() > 0.8 ? 'new' : null);
         const note = category === '电影' ? (Math.random() > 0.5 ? 'HD' : '4K') : `更新至${Math.min(epCount, 40)}集`;
@@ -153,26 +370,19 @@ const VodAPI = {
           title,
           pic: colors[i % colors.length],
           type: category === '电影' ? '电影' : (category === '动漫' ? '动漫' : '电视剧'),
-          year,
-          area,
-          score: parseFloat(score),
+          year, area, score: parseFloat(score),
           director: actors[Math.floor(Math.random() * actors.length)],
           actor: actors.sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 4)).join(' / '),
-          desc: `${title}是一部${year}年${area}出品的${genre1}${genre2}作品。由${actors[Math.floor(Math.random() * actors.length)]}领衔主演，${Math.floor(Math.random() * 200 + 50)}万人评分${score}分。${year % 2 === 0 ? '影片口碑与票房双丰收' : '凭借精良的制作和出色的表演获得观众喜爱'}，是${year}年度${category === '综艺' ? '热门综艺节目' : '最受关注的作品'}之一。`,
-          badge,
-          note,
-          episodes: epCount > 1 ? Array.from({length: epCount}, (_, j) => ({
-            name: `第${j + 1}集`,
-            url: ''
-          })) : [{name: '正片', url: ''}],
-          // 多线路支持
+          desc: `${title}是一部${year}年${area}出品的${g1}${g2}作品。由${actors[Math.floor(Math.random() * actors.length)]}领衔主演，${Math.floor(Math.random() * 200 + 50)}万人评分${score}分。${year % 2 === 0 ? '影片口碑与票房双丰收' : '凭借精良的制作和出色的表演获得观众喜爱'}，是${year}年度${category === '综艺' ? '热门综艺节目' : '最受关注的作品'}之一。`,
+          badge, note,
+          episodes: epCount > 1 ? Array.from({length: epCount}, (_, j) => ({ name: `第${j + 1}集`, url: '' })) : [{name: '正片', url: ''}],
           sources: [
             { name: '线路1', episodes: Array.from({length: epCount}, (_, j) => ({name: epCount === 1 ? '正片' : `第${j+1}集`, url: ''})) },
-            ...(Math.random() > 0.4 ? [{name: '线路2', episodes: Array.from({length: epCount}, (_, j) => ({name: epCount === 1 ? '正片' : `第${j+1}集`, url: ''})) }] : []),
-            ...(Math.random() > 0.7 ? [{name: '线路3', episodes: Array.from({length: epCount}, (_, j) => ({name: epCount === 1 ? '正片' : `第${j+1}集`, url: ''})) }] : [])
+            ...(Math.random() > 0.4 ? [{name: '线路2', episodes: Array.from({length: epCount}, (_, j) => ({name: epCount === 1 ? '正片' : `第${j+1}集`, url: ''}))}] : []),
+            ...(Math.random() > 0.7 ? [{name: '线路3', episodes: Array.from({length: epCount}, (_, j) => ({name: epCount === 1 ? '正片' : `第${j+1}集`, url: ''}))}] : [])
           ],
-          genre: [genre1, genre2],
-          lang: ['国语', '粤语', '英语', '日语', '韩语'][Math.floor(Math.random() * 5)]
+          genre: [g1, g2],
+          lang: ['国语','粤语','英语','日语','韩语'][Math.floor(Math.random() * 5)]
         };
       });
     };
@@ -180,19 +390,19 @@ const VodAPI = {
     this._demoData = {
       home: {
         banner: [
-          { id: 'b1', title: '沙丘2', pic: 'linear-gradient(135deg,#1a1a2e,#0f3460,#533483)', desc: '保罗·厄崔迪与弗瑞曼人联合，踏上复仇之路，同时面对宇宙中已知与未知的威胁', score: 8.2, year: 2024, tags: ['科幻', '冒险'], badge: 'hot' },
-          { id: 'b2', title: '庆余年2', pic: 'linear-gradient(135deg,#2d1b69,#d76d77)', desc: '范闲从一个身世神秘的少年，一路披荆斩棘，历经家族、江湖、庙堂的种种考验', score: 8.5, year: 2024, tags: ['古装', '权谋'], badge: 'hot' },
-          { id: 'b3', title: '狂飙', pic: 'linear-gradient(135deg,#0f2027,#2c5364)', desc: '刑警安欣与鱼贩高启强命运交汇，一场正邪较量横跨二十年', score: 9.0, year: 2023, tags: ['犯罪', '悬疑'], badge: 'hot' },
-          { id: 'b4', title: '进击的巨人 最终季', pic: 'linear-gradient(135deg,#1b1b2f,#3a1c71)', desc: '调查兵团与艾伦的最终对决，人类与巨人的命运交织', score: 9.5, year: 2024, tags: ['热血', '奇幻'], badge: 'hot' },
+          { id:'b1', title:'沙丘2', pic:'linear-gradient(135deg,#1a1a2e,#0f3460,#533483)', desc:'保罗·厄崔迪与弗瑞曼人联合，踏上复仇之路', score:8.2, year:2024, tags:['科幻','冒险'], badge:'hot' },
+          { id:'b2', title:'庆余年2', pic:'linear-gradient(135deg,#2d1b69,#d76d77)', desc:'范闲身世神秘的少年，一路披荆斩棘', score:8.5, year:2024, tags:['古装','权谋'], badge:'hot' },
+          { id:'b3', title:'狂飙', pic:'linear-gradient(135deg,#0f2027,#2c5364)', desc:'刑警安欣与鱼贩高启强命运交汇', score:9.0, year:2023, tags:['犯罪','悬疑'], badge:'hot' },
+          { id:'b4', title:'进击的巨人 最终季', pic:'linear-gradient(135deg,#1b1b2f,#3a1c71)', desc:'调查兵团与艾伦的最终对决', score:9.5, year:2024, tags:['热血','奇幻'], badge:'hot' },
         ],
         sections: [
-          { title: '热门推荐', key: 'hot', movies: makeMovies('电影', titles['电影'].slice(0, 10)).concat(makeMovies('电视剧', titles['电视剧'].slice(0, 6))) },
-          { title: '最新电影', key: 'new_movie', movies: makeMovies('电影', titles['电影']) },
-          { title: '热播电视剧', key: 'hot_series', movies: makeMovies('电视剧', titles['电视剧']) },
-          { title: '国产动漫', key: 'anime', movies: makeMovies('动漫', titles['动漫']) },
-          { title: '热门综艺', key: 'variety', movies: makeMovies('综艺', titles['综艺'].slice(0, 10)) },
-          { title: '高分经典', key: 'classic', movies: makeMovies('电影', titles['电影'].slice(5)).filter(m => m.score > 7.5) },
-          { title: '科幻冒险', key: 'scifi', movies: makeMovies('电影', titles['电影'].slice(10, 18)).concat(makeMovies('动漫', titles['动漫'].slice(0, 4))) },
+          { title:'热门推荐', movies: makeMovies('电影', titles['电影'].slice(0,10)).concat(makeMovies('电视剧', titles['电视剧'].slice(0,6))) },
+          { title:'最新电影', movies: makeMovies('电影', titles['电影']) },
+          { title:'热播电视剧', movies: makeMovies('电视剧', titles['电视剧']) },
+          { title:'国产动漫', movies: makeMovies('动漫', titles['动漫']) },
+          { title:'热门综艺', movies: makeMovies('综艺', titles['综艺'].slice(0,10)) },
+          { title:'高分经典', movies: makeMovies('电影', titles['电影'].slice(5)).filter(m => m.score > 7.5) },
+          { title:'科幻冒险', movies: makeMovies('电影', titles['电影'].slice(10,18)).concat(makeMovies('动漫', titles['动漫'].slice(0,4))) },
         ]
       },
       categories: {
@@ -205,7 +415,7 @@ const VodAPI = {
         const all = [...titles['电影'], ...titles['电视剧'], ...titles['动漫'], ...titles['综艺']];
         const results = all.filter(t => t.toLowerCase().includes(keyword.toLowerCase()));
         return results.slice(0, 12).map((t, i) => {
-          const cat = t in titles['电影'] ? '电影' : (t in titles['电视剧'] ? '电视剧' : '动漫');
+          const cat = titles['电影'].includes(t) ? '电影' : (titles['电视剧'].includes(t) ? '电视剧' : '动漫');
           const base = makeMovies(cat, [t])[0];
           base.note = cat === '电影' ? 'HD' : `更新至${base.episodes.length}集`;
           return base;
@@ -215,7 +425,6 @@ const VodAPI = {
     return this._demoData;
   },
 
-  // 获取首页数据
   async getHome() {
     const cached = this._getCached('home');
     if (cached) return cached;
@@ -224,7 +433,6 @@ const VodAPI = {
     return data;
   },
 
-  // 获取分类数据
   async getCategory(cat) {
     const key = 'cat_' + cat;
     const cached = this._getCached(key);
@@ -235,7 +443,6 @@ const VodAPI = {
     return data;
   },
 
-  // 搜索
   async search(keyword) {
     if (!keyword) return [];
     const key = 'search_' + keyword;
@@ -245,29 +452,6 @@ const VodAPI = {
     this._setCache(key, results);
     return results;
   },
-
-  // 获取影片详情
-  async getDetail(movieId) {
-    const data = this._getDemoData();
-    const cat = movieId.startsWith('电视剧') ? '电视剧' : (movieId.startsWith('动漫') ? '动漫' : (movieId.startsWith('综艺') ? '综艺' : '电影'));
-    const idx = parseInt(movieId.split('_')[1]);
-    const movies = data.categories[cat];
-    if (movies && movies[idx]) return movies[idx];
-    return null;
-  },
-
-  // 解析真实视频源（支持未来扩展）
-  async fetchFromSource(source) {
-    if (!source || !source.url) return null;
-    try {
-      const resp = await fetch(source.url);
-      const json = await resp.json();
-      return json;
-    } catch(e) {
-      console.error('Fetch source error:', e);
-      return null;
-    }
-  }
 };
 
 // ========= 历史记录管理器 =========
@@ -281,28 +465,9 @@ const HistoryManager = {
     const list = this.getAll();
     const existing = list.findIndex(h => h.id === movie.id && h.episode === episode);
     if (existing > -1) list.splice(existing, 1);
-    list.unshift({
-      id: movie.id,
-      title: movie.title,
-      pic: movie.pic,
-      episode,
-      time: Date.now(),
-      progress: 0
-    });
+    list.unshift({ id: movie.id, title: movie.title, pic: movie.pic, episode, time: Date.now(), progress: 0 });
     if (list.length > this._max) list.length = this._max;
     Store.set(this._key, list);
-  },
-
-  getProgress(movieId, episode) {
-    const list = this.getAll();
-    const h = list.find(h => h.id === movieId && h.episode === episode);
-    return h ? h.progress : 0;
-  },
-
-  setProgress(movieId, episode, progress) {
-    const list = this.getAll();
-    const h = list.find(h => h.id === movieId && h.episode === episode);
-    if (h) { h.progress = progress; Store.set(this._key, list); }
   },
 
   clear() { Store.remove(this._key); }
@@ -322,17 +487,7 @@ const FavoriteManager = {
       Store.set(this._key, list);
       return false;
     } else {
-      list.unshift({
-        id: movie.id,
-        title: movie.title,
-        pic: movie.pic,
-        score: movie.score,
-        type: movie.type,
-        desc: movie.desc,
-        episodes: movie.episodes,
-        sources: movie.sources,
-        addTime: Date.now()
-      });
+      list.unshift({ id: movie.id, title: movie.title, pic: movie.pic, score: movie.score, type: movie.type, desc: movie.desc, episodes: movie.episodes, sources: movie.sources, addTime: Date.now() });
       Store.set(this._key, list);
       return true;
     }
@@ -346,6 +501,7 @@ const FavoriteManager = {
 // ========= 工具函数 =========
 function showToast(msg, type = 'info', duration = 2500) {
   const container = document.getElementById('toast-container');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = msg;
