@@ -1,16 +1,15 @@
-# Dependencies
-node_modules/
-
+# Android build outputs
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
 # IDE
-.vscode/
 .idea/
-
+*.iml
+.gradle/
+build/
 # OS
 .DS_Store
 Thumbs.db
-Desktop.ini
-
 # Temp
 *.tmp
-*.log
-*.swp

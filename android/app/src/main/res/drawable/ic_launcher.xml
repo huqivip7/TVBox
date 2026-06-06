@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+
+    <!-- Background rounded square -->
+    <path
+        android:pathData="M40,0L152,0A40,40 0,0 1,192 40L192,152A40,40 0,0 1,152 192L40,192A40,40 0,0 1,0 152L0,40A40,40 0,0 1,40 0Z"
+        android:fillColor="#0A0E1A"/>
+
+    <!-- TV screen body -->
+    <path
+        android:pathData="M32,50L160,50A10,10 0,0 1,170 60L170,130A10,10 0,0 1,160 140L32,140A10,10 0,0 1,22 130L22,60A10,10 0,0 1,32 50Z"
+        android:fillColor="#0D1B2A"/>
+
+    <!-- Screen inner border glow -->
+    <path
+        android:pathData="M32,50L160,50A10,10 0,0 1,170 60L170,130A10,10 0,0 1,160 140L32,140A10,10 0,0 1,22 130L22,60A10,10 0,0 1,32 50Z"
+        android:strokeColor="#007AFF"
+        android:strokeWidth="2.5"
+        android:fillColor="@null"/>
+
+    <!-- TV stand left -->
+    <path
+        android:pathData="M68,140L72,156A4,4 0,0 1,68 160L60,160A4,4 0,0 1,56 156L60,140Z"
+        android:fillColor="#1B2838"/>
+
+    <!-- TV stand right -->
+    <path
+        android:pathData="M124,140L128,156A4,4 0,0 1,124 160L116,160A4,4 0,0 1,112 156L116,140Z"
+        android:fillColor="#1B2838"/>
+
+    <!-- Play button triangle -->
+    <path
+        android:pathData="M76,72L76,120A6,6 0,0 0,85 125L122,99A6,6 0,0 0,122 91L85,67A6,6 0,0 0,76 72Z"
+        android:fillColor="#007AFF"/>
+
+    <!-- Play button highlight -->
+    <path
+        android:pathData="M80,78L80,114A3,3 0,0 0,84.5 116.5L115,96A3,3 0,0 0,115 93L84.5,72.5A3,3 0,0 0,80 78Z"
+        android:fillColor="#3396FF"/>
+
+</vector>
